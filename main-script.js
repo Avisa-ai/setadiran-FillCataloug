@@ -1,13 +1,17 @@
 // ==UserScript==
-// @name         Setadiran Form Auto Filler
+// @name         Setadiran Form Auto Filler + Catalog Queue
 // @namespace    setadiran-autofiller
-// @version      4.0.0
-// @description  تکمیل خودکار فیلدهای اجباری فرم مشخصات کالا در ستاد ایران (fe.setadiran.ir)
+// @version      5.0.0
+// @description  تکمیل خودکار فیلدهای اجباری فرم مشخصات کالا در ستاد ایران، به‌همراه پردازش خودکار صف چند کاتالوگ
 // @match        https://fe.setadiran.ir/item/*
-// @run-at       document-idle
+// @match        https://eproc.setadiran.ir/eproc/supplierNeedResponse-load.do*
 // @updateURL    https://raw.githubusercontent.com/Avisa-ai/setadiran-FillCataloug/refs/heads/main/main-script.js
 // @downloadURL  https://raw.githubusercontent.com/Avisa-ai/setadiran-FillCataloug/refs/heads/main/main-script.js
-// @grant        none
+// @run-at       document-idle
+// @grant        GM_setValue
+// @grant        GM_getValue
+// @grant        GM_deleteValue
+// @grant        unsafeWindow
 // ==/UserScript==
 
 (function () {
@@ -55,6 +59,11 @@
         menuWaitTimeout: 4000,     // حداکثر انتظار برای باز شدن منو/لیست گزینه‌ها (ms)
         autocompleteWaitTimeout: 7000, // حداکثر انتظار برای نتایج جست‌وجوی سروری Autocomplete (ms)
 
+        // --- تنظیمات مربوط به پردازش خودکار صف چند کاتالوگ ---
+        submitButtonTexts: ["ثبت"],     // متن دکمه‌ی ثبت فرم کاتالوگ؛ اگر دکمه پیدا نشد، این را با HTML واقعی دکمه اصلاح کنید
+        submitWatchdogTimeout: 12000,   // اگر بعد از زدن «ثبت» تا این مدت صفحه عوض نشد، یعنی خطا رخ داده (ms)
+        afterCatalogSuccessDelay: 800,  // مکث کوتاه بعد از فرود روی صفحه‌ی لیست، قبل از رفتن سراغ کاتالوگ بعدی (ms)
+
         fields: {
             "MESC Code": "1",
             "کد MESC": "1",
@@ -64,28 +73,35 @@
             "تعداد اقلام ست": "1",
             "طول": "1",
             "سایز": "1",
+            "سایز سری": "1",
             "تعداد در بسته": "1",
             "رنگ ست": "نقره ای",
             "رنگ": "سفید",
             "نوع": "ساده",
+            "نوع سری": "صاف",
+            "نوع کاتر": "دابل اکشن",
             "نوع باند": "کنار بافت",
             "کارابین": "دارد",
             "سیم بکسل": "دارد",
             "قابلیت اتوکلاو": "دارد",
-            "استریل": "هست",
+            "قابل اتوکلاو": "بله",
             "نوع مصرف پنس": "چندبار مصرف",
             "ضد اشعه UV": "بله",
+            "یکبار مصرف": "بله",
             "ضد آب": "بله",
             "آسان برش": "بله",
             "دوطرفه": "بله",
             "ضد حساسیت": "بله",
-            "جنس": ["استیل ضد زنگ", "استنلس استیل", "فولاد ضد زنگ"],
+            "اقلام کیت": "کانولای ایریگیشن",
+            "جنس": ["استیل ضد زنگ", "استنلس استیل", "استیل استنلس", "فولاد ضد زنگ"],
             "نام تجاری (برند)": ["متفرقه", "لوئیس"],
-            "کشور سازنده": "ایران",
-            "وزن": { value: "1", unit: "کیلوگرم" },
+            "استریل": ["هست", "بله"],
+            "کشور سازنده" :" ایران",
+            "وزن": { value: "1", unit: "گرم" },
             "ابعاد محصول": {
                 "طول": "1",
-                "عرض": "1"
+                "عرض": "1",
+                "ارتفاع": "1"
             }
 
             // افزودن فیلد جدید در آینده، فقط همین کافی است:
@@ -166,11 +182,19 @@
         const cx = rect.left + rect.width / 2;
         const cy = rect.top + rect.height / 2;
 
+        // نکته‌ی مهم: چون این اسکریپت با @grant های GM_* اجرا می‌شود، Tampermonkey
+        // آن را در یک sandbox جدا اجرا می‌کند و در آن sandbox، متغیر «window»
+        // خودِ window واقعیِ صفحه نیست — همین باعث خطای «Failed to convert
+        // value to 'Window'» هنگام ساخت MouseEvent می‌شد. راه‌حل: همیشه
+        // window واقعیِ صفحه را از روی خودِ element بگیریم.
+        const realWindow = (element.ownerDocument && element.ownerDocument.defaultView) ||
+            (typeof unsafeWindow !== "undefined" ? unsafeWindow : window);
+
         const common = {
             bubbles: true,
             cancelable: true,
             composed: true,
-            view: window,
+            view: realWindow,
             button: 0,
             buttons: 1,
             clientX: cx,
@@ -178,14 +202,122 @@
         };
 
         ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach(type => {
-            const EventCtor = type.startsWith("pointer") ? PointerEvent : MouseEvent;
+            const EventCtor = type.startsWith("pointer") ? realWindow.PointerEvent : realWindow.MouseEvent;
             try {
                 element.dispatchEvent(new EventCtor(type, common));
             } catch (e) {
                 // برخی مرورگرها PointerEvent را در همه موارد پشتیبانی نمی‌کنند
-                element.dispatchEvent(new MouseEvent(type, common));
+                element.dispatchEvent(new realWindow.MouseEvent(type, common));
             }
         });
+    }
+
+    /************************************************
+     * ۲.۱) مدیریت صفِ کاتالوگ‌ها (ذخیره‌سازیِ مشترک بین eproc.setadiran.ir و fe.setadiran.ir)
+     *
+     * از GM_setValue/GM_getValue استفاده می‌کنیم چون این دو دامنه با هم فرق
+     * دارند و localStorage معمولی بین‌شان مشترک نیست؛ اما ذخیره‌سازیِ Tampermonkey
+     * برای یک اسکریپت، مستقل از دامنه‌ی صفحه و در همه‌ی match ها یکسان است.
+     ************************************************/
+    const QUEUE_KEY = "setadiran_af_queue_v1";
+
+    function loadQueue() {
+        try {
+            const raw = GM_getValue(QUEUE_KEY, null);
+            return raw ? JSON.parse(raw) : null;
+        } catch (e) {
+            warn("خطا در خواندن صف:", e);
+            return null;
+        }
+    }
+
+    function saveQueue(queue) {
+        GM_setValue(QUEUE_KEY, JSON.stringify(queue));
+    }
+
+    function clearQueue() {
+        GM_deleteValue(QUEUE_KEY);
+    }
+
+    /**
+     * پنل شناور وضعیت صف — پیام + دکمه‌های اختیاری نشان می‌دهد.
+     */
+    function showPanel(message, options = {}) {
+        removePanel();
+
+        const panel = document.createElement("div");
+        panel.id = "setadiran-queue-panel";
+
+        Object.assign(panel.style, {
+            position: "fixed",
+            bottom: "20px",
+            left: "20px",
+            zIndex: "999999",
+            maxWidth: "340px",
+            padding: "14px 16px",
+            background: "#263238",
+            color: "#fff",
+            borderRadius: "8px",
+            fontSize: "13px",
+            fontFamily: "Tahoma, Arial, sans-serif",
+            lineHeight: "1.8",
+            boxShadow: "0 2px 10px rgba(0,0,0,0.4)",
+            direction: "rtl"
+        });
+
+        const text = document.createElement("div");
+        text.textContent = message;
+        panel.appendChild(text);
+
+        (options.buttons || []).forEach(({ text: btnText, onClick }) => {
+            const btn = document.createElement("button");
+            btn.textContent = btnText;
+            Object.assign(btn.style, {
+                marginTop: "8px",
+                marginInlineEnd: "6px",
+                padding: "6px 12px",
+                background: "#1976d2",
+                color: "#fff",
+                border: "none",
+                borderRadius: "5px",
+                fontSize: "12px",
+                cursor: "pointer"
+            });
+            btn.addEventListener("click", onClick);
+            panel.appendChild(btn);
+        });
+
+        document.body.appendChild(panel);
+
+        if (options.autoHide) {
+            setTimeout(removePanel, options.autoHide === true ? 5000 : options.autoHide);
+        }
+    }
+
+    function removePanel() {
+        const existing = document.getElementById("setadiran-queue-panel");
+        if (existing) existing.remove();
+    }
+
+    /**
+     * پیدا کردن دکمه‌ی «ثبت» (یا هر متن دیگری که در CONFIG.submitButtonTexts بگذارید)
+     */
+    function findButtonByText(textList) {
+        const wanted = textList.map(normalizeText);
+        const candidates = [...document.querySelectorAll(
+            'button, a[role="button"], div[role="button"], input[type="submit"], input[type="button"]'
+        )];
+
+        const visible = el => el.offsetParent !== null && !el.disabled;
+        const labelOf = el => normalizeText(
+            (el.value !== undefined && el.value !== "" ? el.value : "") ||
+            el.getAttribute("data-tooltip") ||
+            el.textContent
+        );
+
+        return candidates.find(el => visible(el) && wanted.includes(labelOf(el))) ||
+            candidates.find(el => visible(el) && wanted.some(w => labelOf(el).includes(w))) ||
+            null;
     }
 
     /************************************************
@@ -605,15 +737,206 @@
     }
 
     /************************************************
-     * ۱۲) شروع اسکریپت — منتظر رندر شدنِ فرم می‌ماند
+     * ۱۲) صفحه‌ی فهرست نیازها (eproc.setadiran.ir) — orchestrator صف
+     *
+     * این صفحه لینک‌های «تکمیل» دارد که هرکدام onclick="showORcompletionCatalog(cartId)"
+     * را صدا می‌زنند. ما این تابع را عیناً (از خود صفحه، از طریق unsafeWindow)
+     * صدا می‌زنیم تا مسیر رسمی و همیشه‌به‌روز سایت طی شود، بدون بازسازیِ
+     * دستیِ URL که با هر تغییر در سایت ممکن است بشکند.
      ************************************************/
-    async function init() {
+
+    function findCompletionCartIds() {
+        const anchors = [...document.querySelectorAll('a[onclick*="showORcompletionCatalog"]')];
+        return anchors
+            .map(a => {
+                const m = a.getAttribute("onclick").match(/showORcompletionCatalog\((\d+)\)/);
+                return m ? m[1] : null;
+            })
+            .filter(Boolean);
+    }
+
+    function goToNextCatalog(queue) {
+        if (!queue.remaining.length) {
+            queue.status = "done";
+            saveQueue(queue);
+            showPanel(`همه‌ی ${queue.total} کاتالوگ با موفقیت تکمیل شدند ✅`, { autoHide: 6000 });
+            clearQueue();
+            return;
+        }
+
+        const nextId = queue.remaining[0];
+        log("در حال رفتن به کاتالوگ:", nextId, "| باقی‌مانده:", queue.remaining.length);
+
+        if (typeof unsafeWindow.showORcompletionCatalog === "function") {
+            unsafeWindow.showORcompletionCatalog(Number(nextId));
+        } else {
+            warn("تابع showORcompletionCatalog روی این صفحه پیدا نشد.");
+            showPanel("تابع «تکمیل» روی این صفحه پیدا نشد؛ لطفاً دستی روی «تکمیل» بزنید.");
+        }
+    }
+
+    function createQueueStartButton(cartIds) {
+        if (document.getElementById("setadiran-queue-start-button")) return;
+
+        const button = document.createElement("button");
+        button.id = "setadiran-queue-start-button";
+        button.type = "button";
+        button.textContent = `تکمیل خودکار همه‌ی کاتالوگ‌ها (${cartIds.length} مورد)`;
+
+        Object.assign(button.style, {
+            position: "fixed",
+            bottom: "20px",
+            right: "20px",
+            zIndex: "999999",
+            padding: "12px 18px",
+            background: "#2e7d32",
+            color: "#fff",
+            border: "none",
+            borderRadius: "6px",
+            fontSize: "14px",
+            fontFamily: "Tahoma, Arial, sans-serif",
+            cursor: "pointer",
+            boxShadow: "0 2px 8px rgba(0,0,0,0.3)"
+        });
+
+        button.addEventListener("click", () => {
+            const queue = {
+                total: cartIds.length,
+                remaining: [...cartIds],
+                done: [],
+                status: "running",
+                listUrl: window.location.href
+            };
+            saveQueue(queue);
+            goToNextCatalog(queue);
+        });
+
+        document.body.appendChild(button);
+    }
+
+    async function initOrchestrator() {
+        const existingQueue = loadQueue();
+
+        // هر برگشتی به این صفحه در حالی که صف باقی‌مانده دارد (چه status
+        // «running» و چه «paused») یعنی کاتالوگ قبلی با موفقیت ثبت شد —
+        // چون تنها راه رسیدنِ دوباره به این صفحه، ثبتِ موفق (خودکار یا دستی)
+        // یا دکمه‌ی «رد کردن این کاتالوگ» است که خودش صف را جلو می‌برد.
+        if (existingQueue && existingQueue.remaining && existingQueue.remaining.length &&
+            (existingQueue.status === "running" || existingQueue.status === "paused")) {
+
+            existingQueue.done = existingQueue.done || [];
+            const justCompleted = existingQueue.remaining.shift();
+            if (justCompleted) existingQueue.done.push(justCompleted);
+            existingQueue.status = "running";
+            saveQueue(existingQueue);
+
+            showPanel(`کاتالوگ تکمیل شد ✅ (${existingQueue.done.length} از ${existingQueue.total}). در حال رفتن به کاتالوگ بعدی…`);
+            await sleep(CONFIG.afterCatalogSuccessDelay);
+            goToNextCatalog(existingQueue);
+            return;
+        }
+
+        const cartIds = findCompletionCartIds();
+        if (!cartIds.length) {
+            log("هیچ کاتالوگ «تکمیل»‌نشده‌ای در این صفحه پیدا نشد.");
+            return;
+        }
+
+        createQueueStartButton(cartIds);
+    }
+
+    /************************************************
+     * ۱۳) صفحه‌ی فرم مشخصات کالا (fe.setadiran.ir) — worker صف
+     ************************************************/
+
+    async function runQueuedFill(queue) {
+        showPanel(`در حال تکمیل کاتالوگ ${queue.done.length + 1} از ${queue.total}…`);
+
+        await sleep(CONFIG.delayBeforeStart);
+
+        for (const [labelText, fieldConfig] of Object.entries(CONFIG.fields)) {
+            await fillOneField(labelText, fieldConfig);
+            await sleep(CONFIG.delayBetweenFields);
+        }
+
+        await sleep(400);
+
+        const submitBtn = findButtonByText(CONFIG.submitButtonTexts);
+        if (!submitBtn) {
+            warn("دکمه‌ی «ثبت» پیدا نشد.");
+            pauseQueueForManualFix(queue, "دکمه‌ی «ثبت» پیدا نشد. لطفاً فرم را بررسی و خودتان ثبت کنید.");
+            return;
+        }
+
+        log("زدن دکمه‌ی ثبت…");
+        simulateRealClick(submitBtn);
+
+        // اگر ثبت موفق باشد، سایت به‌طور خودکار به eproc.setadiran.ir برمی‌گردد
+        // و این اسکریپت (چون صفحه عوض می‌شود) دیگر ادامه پیدا نمی‌کند.
+        // اگر بعد از این مهلت هنوز همین‌جاییم، یعنی خطایی رخ داده.
+        await sleep(CONFIG.submitWatchdogTimeout);
+
+        pauseQueueForManualFix(
+            queue,
+            "به نظر می‌رسد ثبت با خطا مواجه شده (بعد از مهلت تعیین‌شده صفحه عوض نشد). لطفاً خطا را در فرم برطرف کرده و خودتان روی «ثبت» بزنید."
+        );
+    }
+
+    function pauseQueueForManualFix(queue, message) {
+        queue.status = "paused";
+        saveQueue(queue);
+
+        showPanel(message, {
+            buttons: [
+                {
+                    text: "رد کردن این کاتالوگ و ادامه",
+                    onClick: () => skipCurrentAndContinue(queue)
+                },
+                {
+                    text: "لغو کامل صف",
+                    onClick: () => { clearQueue(); removePanel(); }
+                }
+            ]
+        });
+    }
+
+    function skipCurrentAndContinue(queue) {
+        // خودِ shift کردنِ آیتم فعلی را به initOrchestrator (بعد از فرود روی
+        // صفحه‌ی لیست) می‌سپاریم تا منطق «حذف از remaining» یک‌جا و یکسان باشد.
+        const fresh = loadQueue() || queue;
+        fresh.status = "paused";
+        saveQueue(fresh);
+        window.location.href = fresh.listUrl;
+    }
+
+    async function initItemPage() {
         await waitFor(() => document.querySelector(".MuiFormLabel-asterisk"), { timeout: 15000, interval: 200 });
+
+        const queue = loadQueue();
+
+        // اگر صف در حال اجراست، خودکار پر کن و ثبت کن؛ وگرنه رفتار قبلی
+        // (دکمه‌ی دستیِ تکی) را نشان بده.
+        if (queue && queue.status === "running") {
+            await runQueuedFill(queue);
+            return;
+        }
+
         createStartButton();
 
         if (CONFIG.autoStart) {
             await sleep(300);
             runAutoFiller();
+        }
+    }
+
+    /************************************************
+     * ۱۴) شروع اسکریپت — بسته به دامنه، مسیر مناسب را اجرا کن
+     ************************************************/
+    async function init() {
+        if (location.hostname === "fe.setadiran.ir") {
+            await initItemPage();
+        } else if (location.hostname === "eproc.setadiran.ir" && /supplierNeedResponse-load\.do/.test(location.pathname)) {
+            await initOrchestrator();
         }
     }
 
