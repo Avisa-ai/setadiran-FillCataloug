@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Setadiran Form Auto Filler + Catalog Queue
 // @namespace    setadiran-autofiller
-// @version      5.0.0
+// @version      5.0.1
 // @description  تکمیل خودکار فیلدهای اجباری فرم مشخصات کالا در ستاد ایران، به‌همراه پردازش خودکار صف چند کاتالوگ
 // @match        https://fe.setadiran.ir/item/*
 // @match        https://eproc.setadiran.ir/eproc/supplierNeedResponse-load.do*
